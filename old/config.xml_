@@ -1,0 +1,26 @@
+<config>
+    <users>
+        <user1>
+            <name>Main</name>
+            <leverage>20</leverage>
+            <proxy></proxy>
+            <api-key>RlB5ioperdXflSIZxWSHsHryhRiEsjXIpucnJMa4A4hEjAntfIsM6vW9eeC4Ylfi</api-key>
+            <api-secret>SPCTsjWiSTwdjHzkdFhRQhubAQzoNIUsD5YQxC5QkY4qW7v71iWo46MCY2GLKLHt</api-secret>
+        </user1>
+        <user2>
+            <name>Me</name>
+            <leverage>20</leverage>
+            <proxy>193.142.42.167:32809</proxy>
+        </user2>        
+    </users>
+    <stop_percent>0.3</stop_percent>
+    <take_percent>0</take_percent>
+    <take_percent1>1.5</take_percent1>
+    <take-percent-summ1>30</take-percent-summ1>
+    <take_percent2>2</take_percent2>
+    <take-percent-summ2>30</take-percent-summ2>
+    <take_percent3>2.5</take_percent3>
+    <take-percent-summ3>20</take-percent-summ3>
+    <take_percent4>3</take_percent4>
+    <take-percent-summ4>20</take-percent-summ4>
+</config>

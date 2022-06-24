@@ -1,0 +1,363 @@
+#import telebot
+from telethon import TelegramClient, sync, events
+import re
+from binance import Client, ThreadedWebsocketManager, ThreadedDepthCacheManager
+import sys
+import os
+import time
+from datetime import datetime
+import xmltodict
+#import math # math.floor() 
+
+user_number = sys.argv[1]
+if not user_number:
+    print ("Forgot user number")
+    sys.exit()
+    
+config_xml = ''
+with open('config.xml', 'r') as f:
+    config_xml = ''.join(list(map(str.strip, f.readlines())))
+config = xmltodict.parse(config_xml)
+
+leverage = int(config['config']['users']['user'+user_number]['leverage'])
+proxy = config['config']['users']['user'+user_number]['proxy']
+api_key = config['config']['users']['user'+user_number]['api-key']
+api_secret = config['config']['users']['user'+user_number]['api-secret']
+
+#summ = 60 #trade summ in dollars
+#leverage = 20
+stop_percent = float(config['config']['stop-percent']) #закрытие при уменьшении цены на этот %
+take_percent = float(config['config']['take-percent']) #тейк при увеличении цены на этот %
+# далее расписана сетка тейков
+take_percent1 = float(config['config']['take-percent1'])
+take_percent_summ1 = int(config['config']['take-percent-summ1'])
+take_percent2 = float(config['config']['take-percent2'])
+take_percent_summ2 = int(config['config']['take-percent-summ2'])
+take_percent3 = float(config['config']['take-percent3'])
+take_percent_summ3 = int(config['config']['take-percent-summ3'])
+take_percent4 = float(config['config']['take-percent4'])
+take_percent_summ4 = int(config['config']['take-percent-summ4'])
+
+
+stdout='orlovbot_out'+user_number+'.log'
+stderr='orlovbot_err'+user_number+'.log'
+
+proxies = {
+    'http': 'http://10.10.1.10:3128',
+    'https': proxy
+}
+
+#bot = telebot.TeleBot('1990712394:AAFK_R3HrJYGM76wV_1UltpQzKY1lig2_bA')
+#@bot.message_handler(content_types=['text'])
+
+def log_time(string):
+    print(str(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]) + ': ' + string)
+
+log_time('START BOT')
+
+def get_text_messages(message):
+    if message.text == "Привет":
+        bot.send_message(message.from_user.id, "Привет, чем я могу тебе помочь?")
+    elif message.text == "/help":
+        bot.send_message(message.from_user.id, "Напиши привет")
+    else:
+        bot.send_message(message.from_user.id, "Я тебя не понимаю. Напиши /help.")
+
+bclient = None
+if proxy:
+    bclient = Client(api_key, api_secret, {'proxies': proxies})
+else:
+    bclient = Client(api_key, api_secret)
+
+def binance(symbol):
+    log_time('Start binance()')
+    """
+    balance_raw = bclient.futures_account_balance()
+    log_time('balance_raw received')
+    balance = ''
+    for item in balance_raw:
+        if item['asset'] == 'USDT':
+            balance = item['balance']
+            print ('Balance: ' + balance)
+    sys.stdout.flush()        
+    if not balance:
+        print ('Error getting balance')
+        sys.exit()
+    balance = float(balance)
+    """
+    """
+    orders = bclient.get_all_orders(symbol=symbol, limit=1)
+    print (orders)
+    sys.exit()
+    """   
+    bclient.futures_change_leverage(symbol=symbol, leverage=leverage)
+    log_time('futures_change_leverage received')
+    #bclient.futures_change_margin_type(symbol=symbol, marginType='ISOLATED')
+    
+    # получение начальной цены для работы
+    orderbook = bclient.get_ticker(symbol=symbol)
+    print("Price: "+ orderbook['lastPrice'])
+    last_price = orderbook['lastPrice']
+    
+    if not last_price:
+        print ("last_price error")
+        sys.exit()
+    
+    last_price = float(last_price)
+    
+    #вычисление точности
+    precision_price = 0
+    if last_price < 0.1:
+        precision_price = 5
+    elif last_price < 1:
+        precision_price = 4
+    elif last_price < 10:
+        precision_price = 3      
+    elif last_price < 1000:
+        precision_price = 2  
+        
+    # вычисление объёма монет
+    balance = 1300
+    amount = (balance*0.97)/last_price*leverage
+    #amount = (balance*0.97)/last_price
+    
+    # определение необходимой точности
+    precision = 0
+    if amount < 1:
+        precision = 4
+    amount = "{:0.0{}f}".format(amount, precision)
+    print ("Amount: "+ str(amount))
+    sys.stdout.flush()
+    #sys.exit()
+    # покупка по рынку
+    log_time('Buy start')
+    bclient.futures_create_order ( 
+        symbol=symbol,
+        type='MARKET',
+        side='BUY',
+        quantity=amount,
+        isIsolated='TRUE'
+    )
+    log_time('Buy end')
+    # получение цены монеты сразу после покупки
+    orderbook = bclient.get_ticker(symbol=symbol)
+    log_time('get_ticker end')
+    last_price = orderbook['lastPrice']
+    last_price = float(last_price)
+    
+    #вычисление цены для стоп-лосса
+    stop_price = last_price - last_price/100*stop_percent
+    #if stop_price > 1:
+    #if stop_price < 1:
+    #    precision = 4
+    stop_price = "{:0.0{}f}".format(stop_price, precision_price)
+    print('Stop price: ' + str(stop_price))
+    sys.stdout.flush()
+    
+    # установка стоп-ордера
+    stop_order = bclient.futures_create_order (
+        symbol=symbol, 
+        side='SELL', 
+        type='STOP_MARKET', 
+        stopPrice=stop_price,
+        closePosition='true'
+    )
+    log_time('stop_order end')
+    amount = float(amount)
+    # установка сетки ордеров, если take_percent=0
+    if not take_percent:
+        ### 1
+        amount1 = amount/100*take_percent_summ1
+        precision = 0
+        if amount1 < 1:
+            precision = 4
+        amount1 = "{:0.0{}f}".format(amount1, precision)
+        print ("Amount1: "+ str(amount1)) 
+        #вычисление цены для тейка
+        take_price1 = last_price + last_price/100*take_percent1
+        take_price1 = "{:0.0{}f}".format(take_price1, precision_price)
+        print('Take price1: ' + str(take_price1)) 
+        sys.stdout.flush()    
+        #установка тейк-профита
+        bclient.futures_create_order (
+            symbol=symbol, 
+            type='LIMIT', 
+            timeInForce='GTC',
+            price=take_price1,  # The price at which you wish to buy/sell, float
+            side='SELL',  # Direction ('BUY' / 'SELL'), string
+            quantity=amount1,  # Number of coins you wish to buy / sell, float
+            reduceOnly='true'
+        )
+        log_time('take1 end')
+        ### 2
+        amount2 = amount/100*take_percent_summ2
+        precision = 0
+        if amount2 < 1:
+            precision = 4
+        amount2 = "{:0.0{}f}".format(amount2, precision)
+        print ("Amount2: "+ str(amount2)) 
+        #вычисление цены для тейка
+        take_price2 = last_price + last_price/100*take_percent2
+        take_price2 = "{:0.0{}f}".format(take_price2, precision_price)
+        print('Take price2: ' + str(take_price2)) 
+        sys.stdout.flush()    
+        #установка тейк-профита
+        bclient.futures_create_order (
+            symbol=symbol, 
+            type='LIMIT', 
+            timeInForce='GTC',
+            price=take_price2,  # The price at which you wish to buy/sell, float
+            side='SELL',  # Direction ('BUY' / 'SELL'), string
+            quantity=amount2,  # Number of coins you wish to buy / sell, float
+            reduceOnly='true'
+        )
+        log_time('take2 end')
+        ### 3
+        amount3 = amount/100*take_percent_summ3
+        precision = 0
+        if amount3 < 1:
+            precision = 4
+        amount3 = "{:0.0{}f}".format(amount3, precision)
+        print ("Amount3: "+ str(amount3)) 
+        #вычисление цены для тейка
+        take_price3 = last_price + last_price/100*take_percent3
+        take_price3 = "{:0.0{}f}".format(take_price3, precision_price)
+        print('Take price3: ' + str(take_price3)) 
+        sys.stdout.flush()    
+        #установка тейк-профита
+        bclient.futures_create_order (
+            symbol=symbol, 
+            type='LIMIT', 
+            timeInForce='GTC',
+            price=take_price3,  # The price at which you wish to buy/sell, float
+            side='SELL',  # Direction ('BUY' / 'SELL'), string
+            quantity=amount3,  # Number of coins you wish to buy / sell, float
+            reduceOnly='true'
+        )
+        log_time('take3 end')
+        #полное закрытие
+        amount4 = float(amount1) + 1 # +1 для того, чтобы точно закрылся весь ордер
+        precision = 0
+        if amount4 < 1:
+            precision = 4
+        amount4 = "{:0.0{}f}".format(amount4, precision)
+        print ("Amount4: "+ str(amount4))     
+        #вычисление цены для тейка
+        take_price4 = last_price + last_price/100*take_percent4
+        take_price4 = "{:0.0{}f}".format(take_price4, precision_price)
+        print('Take price4: ' + str(take_price4)) 
+        sys.stdout.flush()      
+        # установка тейк-профита
+        bclient.futures_create_order (
+            symbol=symbol, 
+            type='LIMIT', 
+            timeInForce='GTC',
+            price=take_price4,  # The price at which you wish to buy/sell, float
+            side='SELL',  # Direction ('BUY' / 'SELL'), string
+            quantity=amount4,  # Number of coins you wish to buy / sell, float
+            reduceOnly='true'
+        )
+        log_time('Last take end')
+  
+    else:
+        amount = amount + 1 # +1 для того, чтобы точно закрылся весь ордер
+        precision = 0
+        if amount < 1:
+            precision = 4
+        amount = "{:0.0{}f}".format(amount, precision)
+        print ("Amount: "+ str(amount))
+        
+        #вычисление цены для тейка
+        take_price = last_price + last_price/100*take_percent
+        #if take_price < 1:
+        #    precision = 4
+        take_price = "{:0.0{}f}".format(take_price, precision_price)
+        print('Take price: ' + str(take_price)) 
+        sys.stdout.flush()
+        
+        # установка тейк-профита
+        bclient.futures_create_order (
+            symbol=symbol, 
+            type='LIMIT', 
+            timeInForce='GTC',
+            price=take_price,  # The price at which you wish to buy/sell, float
+            side='SELL',  # Direction ('BUY' / 'SELL'), string
+            quantity=amount,  # Number of coins you wish to buy / sell, float
+            reduceOnly='true'
+        )
+        
+    time.sleep(20)
+    # отмена стоп ордера
+    bclient.futures_cancel_order(symbol=symbol, orderId=stop_order["orderId"])
+    log_time('futures_cancel_order end')
+    #вычисление цены для переноса стоп-лосса в безубыток
+    stop_price = last_price + last_price/100*0.1
+    #if stop_price < 1:
+    #    precision = 4
+    stop_price = "{:0.0{}f}".format(stop_price, precision_price)
+    print('Stop price2: ' + str(stop_price))
+    sys.stdout.flush()   
+    # установка нового стоп-ордера
+    bclient.futures_create_order (
+        symbol=symbol, 
+        side='SELL', 
+        type='STOP_MARKET', 
+        stopPrice=stop_price,
+        closePosition='true'
+    )    
+    log_time('futures_create_order(2) end')
+    print ("---------------------------------------------------")
+# =======================================================================
+        
+if(1):    
+    if (1):
+        sys.stderr.flush()
+        with open(stderr, 'a+') as stderr:
+            os.dup2(stderr.fileno(), sys.stderr.fileno())
+
+        sys.stdout.flush()
+        ##print(4)
+        with open(stdout, 'a+') as stdout:
+            os.dup2(stdout.fileno(), sys.stdout.fileno())
+
+#bot.polling(none_stop=True, interval=0)
+
+
+# Вставляем api_id и api_hash
+api_id = 7428364
+api_hash = '98020087a8d56f047f3c92de8bd8d5bc'
+
+client = TelegramClient('X100TradingBot', api_id, api_hash)
+
+@client.on(events.NewMessage(pattern=r'Покупаю\s\#|orlovbot'))
+async def normal_handler(event):
+    log_time('SIGNAL')
+    message = event.message.to_dict()['message']
+    log_time('MESSAGE RECEIVED')
+    if re.match(r'Покупаю\s\#(\w+)', message):
+        #print(message)
+        symbol = re.match(r'Покупаю\s\#(\w+)', message).group(1)+'USDT'
+        print(symbol)
+        binance(symbol)
+        await client.send_message('@Adm_S_R', symbol+" buy")
+    elif re.match(r'orlovbot', message):
+        tmp = re.match(r'orlovbot\s(\w+)\s([\d\.]+)\s(\w+)', message)
+        command = tmp.group(1)
+        price = tmp.group(2)
+        market_type = tmp.group(3)
+        if not command or not price or not market_type:
+            print ('Orlovbot command error')
+            sys.exit()
+        print (command)
+        print (price)
+        print (market_type)
+        sys.stdout.flush()
+    
+client.start()
+client.run_until_disconnected()
+
+#193.142.42.167:32809
+
+
+
+

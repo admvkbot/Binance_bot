@@ -1,0 +1,2 @@
+- определение макс плеча для монеты на фьючах
+https://dev.binance.vision/t/how-to-get-the-max-leverage-for-futures-using-the-binance-api/509/3
